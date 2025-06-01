@@ -415,6 +415,7 @@ io.sockets.on('connection', (socket) => {
 
 			isWorking = 1;
 			const client = await openClientConnection();
+			console.log(data.startRegister, data.values);
 
 			let bufData = await writeMultipleData(data.startRegister, data.values);
 			await client.write(bufData);
