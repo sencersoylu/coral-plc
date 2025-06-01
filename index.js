@@ -114,6 +114,8 @@ async function openClientConnection() {
 				reject('Connection Problem!');
 			});
 
+		
+
 			client.on('data', (data) => {
 				let test, buff;
 				try {
@@ -365,6 +367,10 @@ io.sockets.on('connection', (socket) => {
 	connections.push(socket);
 	console.log(' %s sockets is connected', connections.length);
 	sendMessage();
+
+	socket.on('coral-control', (msg) => {
+    io.emit('coral-control', msg);
+  });
 
 	socket.on('disconnect', () => {
 		connections.splice(connections.indexOf(socket), 1);
