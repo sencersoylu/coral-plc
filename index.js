@@ -305,6 +305,30 @@ setInterval(async () => {
 			//console.log(writeData())
 			//let data = await writeData('R0020',87);
 			//await client.write(data);
+			
+const buf1 = Buffer.from(
+	[
+		0x02,
+		'0'.charCodeAt(),
+		'1'.charCodeAt(),
+		'4'.charCodeAt(),
+		'6'.charCodeAt(),
+		'1'.charCodeAt(),
+		'3'.charCodeAt(),
+	],
+	'ascii'
+);
+
+const buf2 = Buffer.from('R02000');
+const bufA = Buffer.concat([buf1, buf2], buf1.length + buf2.length);
+
+const LRC = calculateLRC(bufA);
+
+const bufB = Buffer.concat([
+	bufA,
+	Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
+]);
+			
 			await client.write(bufB);
 		} catch (err) {
 			console.log(err);
