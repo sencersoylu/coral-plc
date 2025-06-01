@@ -376,9 +376,9 @@ io.sockets.on('connection', (socket) => {
 
 			console.log(data);
 			let test = JSON.parse(data);
-			console.log(test);
+			console.log(test,test.register,test.value);
 
-			let bufData = await writeData(test.address, test.value);
+			let bufData = await writeData(test.register, test.value);
 			await client.write(bufData);
 		} catch (err) {
 			console.log(err);
