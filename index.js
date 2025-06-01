@@ -354,7 +354,12 @@ server.listen(4000, () => console.log('Listening on port 4000'));
 // IO CONFIGS
 // ***********************************************************
 // ***********************************************************
-let io = new socketIO(server);
+let io = socketIO(server, {
+	cors: {
+		origin: "*",
+		methods: ["GET", "POST"]
+	}
+});
 
 io.sockets.on('connection', (socket) => {
 	connections.push(socket);
