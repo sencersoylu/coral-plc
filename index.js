@@ -236,6 +236,58 @@ async function writeData(registerAdress, value) {
 	return bufB;
 }
 
+async function writeMultipleData(startRegisterAddress, values) {
+	// values should be an array of values to write to continuous registers
+	const numValues = values.length;
+	
+	// Convert number to 2-character hex string for NUM field
+	const numHex = numValues.toString(16).padStart(2, '0').toUpperCase();
+	
+	const buf1 = Buffer.from(
+		[
+			0x02,
+			'0'.charCodeAt(),
+			'1'.charCodeAt(),
+			'4'.charCodeAt(),
+			'7'.charCodeAt(),
+			numHex[0].charCodeAt(),
+			numHex[1].charCodeAt(),
+		],
+		'ascii'
+	);
+
+	// Register address buffer
+	const buf2 = Buffer.from(startRegisterAddress, 'ascii');
+	
+	// Create buffers for all values
+	const valueBuffers = [];
+	for (let i = 0; i < values.length; i++) {
+		const valueHex = d2h(parseInt(values[i])).toUpperCase();
+		valueBuffers.push(Buffer.from(valueHex, 'ascii'));
+	}
+	
+	// Concatenate all value buffers
+	const buf3 = Buffer.concat(valueBuffers);
+
+	const bufA = Buffer.concat(
+		[buf1, buf2, buf3],
+		buf1.length + buf2.length + buf3.length
+	);
+
+	const LRC = calculateLRC(bufA);
+
+	console.log(`LRC: ${LRC}`);
+	console.log(`Writing ${numValues} values starting at ${startRegisterAddress}:`, values);
+
+	const bufB = Buffer.concat([
+		bufA,
+		Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
+	]);
+
+	console.log('Complete buffer:', bufB);
+	return bufB;
+}
+
 // *****************************************
 // *****************************************
 // *****************************************
@@ -334,6 +386,27 @@ io.sockets.on('connection', (socket) => {
 			console.log('**************** END ****************');
 		}
 	});
+
+	socket.on('writeMultipleRegisters', async function (data) {
+		console.log('Writing multiple registers:', data);
+
+		try {
+			console.log('**************** START MULTIPLE WRITE ****************');
+
+			isWorking = 1;
+			const client = await openClientConnection();
+
+			let bufData = await writeMultipleData(data.startRegister, data.values);
+			await client.write(bufData);
+		} catch (err) {
+			console.log(err);
+			isConnectedPLC = 0;
+		} finally {
+			isWorking = 0;
+			// client.destroy();
+			console.log('**************** END MULTIPLE WRITE ****************');
+		}
+	});
 });
 
 // const convert = require('amrhextotext');
@@ -366,3 +439,28 @@ io.sockets.on('connection', (socket) => {
 // client.on('timeout', function () {
 // 	console.log('Client request time out. ');
 // });
+
+// *****************************************
+// EXAMPLE USAGE FOR MULTIPLE DATA WRITE
+// *****************************************
+// 
+// Usage example for writeMultipleData function:
+// 
+// 1. Direct function call:
+//    const buffer = await writeMultipleData('WY16', [0xAAAA, 0x5555]);
+//    // This writes 0xAAAA to WY16 and 0x5555 to WY32 (continuous registers)
+//
+// 2. Via socket event (from client):
+//    socket.emit('writeMultipleRegisters', {
+//        startRegister: 'WY16',
+//        values: [43690, 21845]  // decimal values
+//    });
+//
+// The function follows the protocol specification:
+// - STN: 01 (Station Number)
+// - CMD: 47 (Continuous Register Data Write command)
+// - NUM: Number of values to write (hex format)
+// - ADDR: Starting register address 
+// - DATA: Array of values in hex format
+// - LRC: Calculated checksum
+//
