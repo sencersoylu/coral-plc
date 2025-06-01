@@ -415,10 +415,11 @@ io.sockets.on('connection', (socket) => {
 
 			isWorking = 1;
 			const client = await openClientConnection();
-			console.log(data);
-			
+			console.log(JSON.parse(data));
+			let test = JSON.parse(data);
+			console.log(test);
 
-			let bufData = await writeMultipleData(data.address, data.values);
+			let bufData = await writeMultipleData(test.address, test.values);
 			await client.write(bufData);
 		} catch (err) {
 			console.log(err);
