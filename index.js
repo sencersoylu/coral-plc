@@ -1,7 +1,6 @@
 const net = require('net');
 require('dotenv').config();
 const express = require('express');
-const redis = require('redis');
 
 const app = express();
 const http = require('http');
@@ -59,9 +58,6 @@ app.use(allRoutes);
 // *****************************************
 // *****************************************
 
-const redisClient = redis.createClient();
-redisClient.on('error', (err) => console.error('Redis Client Error', err));
-redisClient.connect().then(() => console.log('Connected to Redis')).catch(console.error);
 
 async function sendMessage() {
 	io.sockets.emit(
