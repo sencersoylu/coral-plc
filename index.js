@@ -374,7 +374,11 @@ io.sockets.on('connection', (socket) => {
 			isWorking = 1;
 			const client = await openClientConnection();
 
-			let bufData = await writeData(data.register, data.value);
+			console.log(data);
+			let test = JSON.parse(data);
+			console.log(test);
+
+			let bufData = await writeData(test.address, test.value);
 			await client.write(bufData);
 		} catch (err) {
 			console.log(err);
