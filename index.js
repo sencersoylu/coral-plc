@@ -418,7 +418,7 @@ io.sockets.on('connection', (socket) => {
 			console.log(data);
 			
 
-			let bufData = await writeMultipleData(data.startRegister, data.values);
+			let bufData = await writeMultipleData(data.address, data.values);
 			await client.write(bufData);
 		} catch (err) {
 			console.log(err);
