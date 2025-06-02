@@ -368,8 +368,8 @@ io.sockets.on('connection', (socket) => {
 	console.log(' %s sockets is connected', connections.length);
 	sendMessage();
 
-	socket.on('coral-control', (msg) => {
-    io.emit('coral-control', msg);
+	socket.on('sensorData', (msg) => {
+    io.emit('sensorData', msg);
   });
 
 	socket.on('disconnect', () => {
