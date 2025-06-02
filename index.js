@@ -369,7 +369,8 @@ io.sockets.on('connection', (socket) => {
 	sendMessage();
 
 	socket.on('sensorData', (msg) => {
-    io.emit('sensorData', JSON.stringify(msg));
+		console.log(msg);
+    io.emit('sensorData', msg);
   });
 
 	socket.on('disconnect', () => {
