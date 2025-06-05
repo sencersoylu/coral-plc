@@ -340,6 +340,12 @@ const bufB = Buffer.concat([
 			// client.destroy();
 			//console.log('**************** END ****************');
 		}
+	} else {
+		console.log('demo mode');
+		io.emit('data', JSON.stringify({
+			isConnectedPLC: 1,
+			data: [4158, 2947, 156, 1024, 8765, 12340, 0, 45, 2947, 4158, 89, 0, 512, 256, 0, 1789, 0, 0, 0]
+		}));
 	}
 }, 500);
 
@@ -370,8 +376,18 @@ io.sockets.on('connection', (socket) => {
 
 	socket.on('sensorData', (msg) => {
 		console.log(msg);
-    io.emit('sensorData', msg);
-  });
+    io.emit('sensorData', JSON.stringify(msg));
+	});
+	
+	socket.on('sessionStart', (msg) => {
+		console.log(msg);
+		io.emit('sessionStart', JSON.stringify(msg));
+	});
+
+	socket.on('chamberControl', (msg) => {
+		console.log(msg);
+		io.emit('chamberControl', JSON.stringify(msg));
+	});
 
 	socket.on('disconnect', () => {
 		connections.splice(connections.indexOf(socket), 1);
@@ -426,7 +442,7 @@ io.sockets.on('connection', (socket) => {
 	socket.on('writeMultipleRegisters', async function (data) {
 		console.log('Writing multiple registers:', data);
 
-		try {
+		try { 
 			console.log('**************** START MULTIPLE WRITE ****************');
 
 			isWorking = 1;
