@@ -386,7 +386,7 @@ io.sockets.on('connection', (socket) => {
 
 	socket.on('chamberControl', (msg) => {
 		console.log(msg);
-		io.emit('chamberControl', JSON.stringify(msg));
+		io.emit('chamberControl', msg);
 	});
 
 	socket.on('disconnect', () => {
