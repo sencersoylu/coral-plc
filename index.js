@@ -7,7 +7,10 @@ const http = require('http');
 const socketIO = require('socket.io');
 const cors = require('cors');
 
-const demo = 0;
+const { Chance } = require('chance');
+const chance = new Chance();
+
+const demo = 1;
 
 const connections = []; // view soket bağlantılarının tutulduğu array
 let isWorking = 0;
@@ -58,7 +61,6 @@ app.use(allRoutes);
 // *****************************************
 // *****************************************
 
-
 async function sendMessage() {
 	io.sockets.emit(
 		'data',
@@ -94,7 +96,7 @@ async function openClientConnection() {
 		try {
 			const client = new net.Socket();
 
-			client.connect(500, '192.168.77.4');
+			client.connect(500, '192.168.77.3');
 
 			client.setTimeout(250, () => {
 				isConnectedPLC = 2;
@@ -113,8 +115,6 @@ async function openClientConnection() {
 				sendMessage();
 				reject('Connection Problem!');
 			});
-
-		
 
 			client.on('data', (data) => {
 				let test, buff;
@@ -237,10 +237,10 @@ async function writeData(registerAdress, value) {
 async function writeMultipleData(startRegisterAddress, values) {
 	// values should be an array of values to write to continuous registers
 	const numValues = values.length;
-	
+
 	// Convert number to 2-character hex string for NUM field
 	const numHex = numValues.toString(16).padStart(2, '0').toUpperCase();
-	
+
 	const buf1 = Buffer.from(
 		[
 			0x02,
@@ -256,14 +256,14 @@ async function writeMultipleData(startRegisterAddress, values) {
 
 	// Register address buffer
 	const buf2 = Buffer.from(startRegisterAddress, 'ascii');
-	
+
 	// Create buffers for all values
 	const valueBuffers = [];
 	for (let i = 0; i < values.length; i++) {
 		const valueHex = d2h(parseInt(values[i])).toUpperCase();
 		valueBuffers.push(Buffer.from(valueHex, 'ascii'));
 	}
-	
+
 	// Concatenate all value buffers
 	const buf3 = Buffer.concat(valueBuffers);
 
@@ -275,7 +275,10 @@ async function writeMultipleData(startRegisterAddress, values) {
 	const LRC = calculateLRC(bufA);
 
 	console.log(`LRC: ${LRC}`);
-	console.log(`Writing ${numValues} values starting at ${startRegisterAddress}:`, values);
+	console.log(
+		`Writing ${numValues} values starting at ${startRegisterAddress}:`,
+		values
+	);
 
 	const bufB = Buffer.concat([
 		bufA,
@@ -307,30 +310,30 @@ setInterval(async () => {
 			//console.log(writeData())
 			//let data = await writeData('R0020',87);
 			//await client.write(data);
-			
-const buf1 = Buffer.from(
-	[
-		0x02,
-		'0'.charCodeAt(),
-		'1'.charCodeAt(),
-		'4'.charCodeAt(),
-		'6'.charCodeAt(),
-		'1'.charCodeAt(),
-		'3'.charCodeAt(),
-	],
-	'ascii'
-);
 
-const buf2 = Buffer.from('R02000');
-const bufA = Buffer.concat([buf1, buf2], buf1.length + buf2.length);
+			const buf1 = Buffer.from(
+				[
+					0x02,
+					'0'.charCodeAt(),
+					'1'.charCodeAt(),
+					'4'.charCodeAt(),
+					'6'.charCodeAt(),
+					'1'.charCodeAt(),
+					'3'.charCodeAt(),
+				],
+				'ascii'
+			);
 
-const LRC = calculateLRC(bufA);
+			const buf2 = Buffer.from('R02000');
+			const bufA = Buffer.concat([buf1, buf2], buf1.length + buf2.length);
 
-const bufB = Buffer.concat([
-	bufA,
-	Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
-]);
-			
+			const LRC = calculateLRC(bufA);
+
+			const bufB = Buffer.concat([
+				bufA,
+				Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
+			]);
+
 			await client.write(bufB);
 		} catch (err) {
 			console.log(err);
@@ -342,12 +345,46 @@ const bufB = Buffer.concat([
 		}
 	} else {
 		console.log('demo mode');
-		io.emit('data', JSON.stringify({
-			isConnectedPLC: 1,
-			data: [4158, 2947, 156, 1024, 8765, 12340, 0, 45, 2947, 4158, 89, 0, 512, 256, 0, 1789, 0, 0, 0]
-		}));
+		io.emit(
+			'data',
+			JSON.stringify({
+				isConnectedPLC: 1,
+				data: [
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					0,
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+					chance.integer({ min: 2500, max: 16383 }),
+				],
+			})
+		);
 	}
-}, 500);
+}, 1000);
+
+// Add a simple health check endpoint
+app.get('/health', (req, res) => {
+	res.json({
+		status: 'ok',
+		timestamp: new Date().toISOString(),
+		connections: connections.length,
+		isConnectedPLC,
+		server: 'Socket.IO Server v4.7.5',
+	});
+});
 
 // ***********************************************************
 // ***********************************************************
@@ -355,7 +392,13 @@ const bufB = Buffer.concat([
 // ***********************************************************
 // ***********************************************************
 const server = http.Server(app);
-server.listen(4000, () => console.log('Listening on port 4000'));
+server.listen(4000, '0.0.0.0', () => {
+	console.log('Listening on port 4000');
+	console.log('Server available at:');
+	console.log('- Local: http://localhost:4000');
+	console.log('- Network: http://0.0.0.0:4000');
+	console.log('- Health check: http://localhost:4000/health');
+});
 
 // ***********************************************************
 // ***********************************************************
@@ -364,21 +407,46 @@ server.listen(4000, () => console.log('Listening on port 4000'));
 // ***********************************************************
 let io = socketIO(server, {
 	cors: {
-		origin: "*",
-		methods: ["GET", "POST"]
-	}
+		origin: '*',
+		methods: ['GET', 'POST'],
+		allowedHeaders: ['my-custom-header'],
+		credentials: true,
+	},
+	allowEIO3: true,
+	transports: ['websocket', 'polling'],
+	pingTimeout: 60000,
+	pingInterval: 25000,
+	upgradeTimeout: 30000,
+	maxHttpBufferSize: 1e6,
+});
+
+// Add connection event handlers
+io.engine.on('initial_headers', (headers, req) => {
+	headers['test'] = '123';
+	headers['set-cookie'] = 'mycookie=456';
+});
+
+io.engine.on('headers', (headers, req) => {
+	headers['test'] = '789';
+});
+
+io.on('connect_error', (err) => {
+	console.log('Socket.IO connect_error:', err);
 });
 
 io.sockets.on('connection', (socket) => {
 	connections.push(socket);
-	console.log(' %s sockets is connected', connections.length);
+	console.log(
+		`Socket connected: ${socket.id}, Total connections: ${connections.length}`
+	);
+	console.log('Client transport:', socket.conn.transport.name);
 	sendMessage();
 
 	socket.on('sensorData', (msg) => {
-		console.log(msg);
-    io.emit('sensorData', JSON.stringify(msg));
+		//console.log(msg);
+		io.emit('sensorData', JSON.stringify(msg));
 	});
-	
+
 	socket.on('sessionStart', (msg) => {
 		console.log(msg);
 		io.emit('sessionStart', JSON.stringify(msg));
@@ -389,22 +457,33 @@ io.sockets.on('connection', (socket) => {
 		io.emit('chamberControl', msg);
 	});
 
-	socket.on('disconnect', () => {
+	socket.on('disconnect', (reason) => {
 		connections.splice(connections.indexOf(socket), 1);
+		console.log(
+			`Socket disconnected: ${socket.id}, Reason: ${reason}, Remaining connections: ${connections.length}`
+		);
+	});
+
+	socket.on('error', (error) => {
+		console.log(`Socket error for ${socket.id}:`, error);
+	});
+
+	socket.on('connect_error', (error) => {
+		console.log(`Socket connect_error for ${socket.id}:`, error);
 	});
 
 	socket.on('writeRegister', async function (data) {
 		console.log(data);
 
 		try {
-			//console.log('**************** START ****************');
+			console.log('**************** START WRITE REGISTER ****************');
 
 			isWorking = 1;
 			const client = await openClientConnection();
 
 			console.log(data);
 			let test = JSON.parse(data);
-			console.log(test,test.register,test.value);
+			console.log(test, test.register, test.value);
 
 			let bufData = await writeData(test.register, test.value);
 			await client.write(bufData);
@@ -414,7 +493,7 @@ io.sockets.on('connection', (socket) => {
 		} finally {
 			isWorking = 0;
 			// client.destroy();
-			//console.log('**************** END ****************');
+			console.log('**************** END WRITE REGISTER ****************');
 		}
 	});
 
@@ -442,7 +521,7 @@ io.sockets.on('connection', (socket) => {
 	socket.on('writeMultipleRegisters', async function (data) {
 		console.log('Writing multiple registers:', data);
 
-		try { 
+		try {
 			console.log('**************** START MULTIPLE WRITE ****************');
 
 			isWorking = 1;
@@ -498,9 +577,9 @@ io.sockets.on('connection', (socket) => {
 // *****************************************
 // EXAMPLE USAGE FOR MULTIPLE DATA WRITE
 // *****************************************
-// 
+//
 // Usage example for writeMultipleData function:
-// 
+//
 // 1. Direct function call:
 //    const buffer = await writeMultipleData('WY16', [0xAAAA, 0x5555]);
 //    // This writes 0xAAAA to WY16 and 0x5555 to WY32 (continuous registers)
@@ -515,7 +594,7 @@ io.sockets.on('connection', (socket) => {
 // - STN: 01 (Station Number)
 // - CMD: 47 (Continuous Register Data Write command)
 // - NUM: Number of values to write (hex format)
-// - ADDR: Starting register address 
+// - ADDR: Starting register address
 // - DATA: Array of values in hex format
 // - LRC: Calculated checksum
 //

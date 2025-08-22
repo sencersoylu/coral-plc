@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Socket.IO Connection Test</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+</head>
+
+<body>
+    <h1>Socket.IO Connection Test</h1>
+    <div id="status">Connecting...</div>
+    <div id="log"></div>
+
+    <script>
+        const log = document.getElementById('log');
+        const status = document.getElementById('status');
+
+        function addLog(message) {
+            const time = new Date().toLocaleTimeString();
+            log.innerHTML += `<div>[${time}] ${message}</div>`;
+            console.log(message);
+        }
+
+        // Test different connection methods
+        const socket = io('http://localhost:4000', {
+            transports: ['websocket', 'polling'],
+            timeout: 20000,
+            forceNew: true
+        });
+
+        socket.on('connect', () => {
+            status.innerHTML = '<span style="color: green;">Connected ✓</span>';
+            addLog('Connected to server');
+            addLog(`Socket ID: ${socket.id}`);
+            addLog(`Transport: ${socket.io.engine.transport.name}`);
+        });
+
+        socket.on('connect_error', (error) => {
+            status.innerHTML = '<span style="color: red;">Connection Error ✗</span>';
+            addLog(`Connection error: ${error.message}`);
+        });
+
+        socket.on('disconnect', (reason) => {
+            status.innerHTML = '<span style="color: orange;">Disconnected</span>';
+            addLog(`Disconnected: ${reason}`);
+        });
+
+        socket.on('data', (data) => {
+            addLog(`Received data: ${data}`);
+        });
+
+        // Transport upgrade events
+        socket.io.engine.on('upgrade', () => {
+            addLog(`Upgraded to ${socket.io.engine.transport.name}`);
+        });
+
+        socket.io.engine.on('upgradeError', (error) => {
+            addLog(`Upgrade error: ${error}`);
+        });
+    </script>
+</body>
+
+</html>
