@@ -526,8 +526,14 @@ io.sockets.on('connection', (socket) => {
 
 			isWorking = 1;
 			const client = await openClientConnection();
-			console.log(JSON.parse(data));
-			let test = JSON.parse(data);
+
+			// Handle both string and object data
+			let test;
+			if (typeof data === 'string') {
+				test = JSON.parse(data);
+			} else {
+				test = data;
+			}
 			console.log(test);
 
 			let bufData = await writeMultipleData(test.address, test.values);
