@@ -18,6 +18,11 @@ let isConnectedPLC = 0;
 
 const sensorData = [];
 
+// Seat & Operator Registry for call system
+const seatSockets = new Map();     // seatNumber → socket
+const operatorSockets = new Map(); // socketId → socket
+const activeCalls = new Map();     // callId → { callId, callerSocket, calleeSocket, startTime }
+
 // *****************************************
 // *****************************************
 // *****************************************
@@ -386,6 +391,85 @@ app.get('/health', (req, res) => {
 	});
 });
 
+// *****************************************
+// *****************************************
+// CALL SYSTEM HELPERS
+// *****************************************
+// *****************************************
+
+function getSeatList() {
+	const seats = [];
+	seatSockets.forEach((sock, seatNumber) => {
+		seats.push({
+			seatNumber,
+			online: sock.connected,
+			inCall: !!sock.currentCallId,
+		});
+	});
+	return seats;
+}
+
+function broadcastSeatList() {
+	const seats = getSeatList();
+	operatorSockets.forEach((sock) => {
+		if (sock.connected) {
+			sock.emit('seat:list', { seats });
+		}
+	});
+}
+
+function resolveTarget(target) {
+	if (target === 'operator') {
+		// Return first connected operator not in a call
+		for (const [, sock] of operatorSockets) {
+			if (sock.connected && !sock.currentCallId) return sock;
+		}
+		return null;
+	}
+
+	// 'seat-3' format
+	const match = target.match(/^seat-(\d+)$/);
+	if (match) {
+		const seatNum = parseInt(match[1], 10);
+		const sock = seatSockets.get(seatNum);
+		return sock?.connected ? sock : null;
+	}
+
+	return null;
+}
+
+function isInCall(socket) {
+	return !!socket.currentCallId && activeCalls.has(socket.currentCallId);
+}
+
+function endCallForSocket(socket) {
+	const callId = socket.currentCallId;
+	if (!callId) return;
+
+	const call = activeCalls.get(callId);
+	if (!call) return;
+
+	// Notify the other party
+	const other = call.callerSocket === socket ? call.calleeSocket : call.callerSocket;
+	if (other?.connected) {
+		other.emit('call:ended', {});
+		other.currentCallId = null;
+	}
+
+	socket.currentCallId = null;
+	cleanupCall(callId);
+}
+
+function cleanupCall(callId) {
+	const call = activeCalls.get(callId);
+	if (call) {
+		if (call.callerSocket) call.callerSocket.currentCallId = null;
+		if (call.calleeSocket) call.calleeSocket.currentCallId = null;
+		activeCalls.delete(callId);
+	}
+	broadcastSeatList();
+}
+
 // ***********************************************************
 // ***********************************************************
 // SERVER CONFIGS
@@ -462,6 +546,19 @@ io.sockets.on('connection', (socket) => {
 		console.log(
 			`Socket disconnected: ${socket.id}, Reason: ${reason}, Remaining connections: ${connections.length}`
 		);
+
+		// Seat/operator cleanup
+		if (socket.role === 'seat' && socket.seatNumber != null) {
+			seatSockets.delete(socket.seatNumber);
+			endCallForSocket(socket);
+			broadcastSeatList();
+			console.log(`Seat ${socket.seatNumber} unregistered (disconnect)`);
+		}
+		if (socket.role === 'operator') {
+			operatorSockets.delete(socket.id);
+			endCallForSocket(socket);
+			console.log(`Operator ${socket.id} unregistered (disconnect)`);
+		}
 	});
 
 	socket.on('error', (error) => {
@@ -470,6 +567,115 @@ io.sockets.on('connection', (socket) => {
 
 	socket.on('connect_error', (error) => {
 		console.log(`Socket connect_error for ${socket.id}:`, error);
+	});
+
+	// *****************************************
+	// SEAT & OPERATOR REGISTRATION
+	// *****************************************
+
+	socket.on('seat:register', ({ seatNumber }) => {
+		seatSockets.set(seatNumber, socket);
+		socket.seatNumber = seatNumber;
+		socket.role = 'seat';
+		console.log(`Seat ${seatNumber} registered: ${socket.id}`);
+		broadcastSeatList();
+	});
+
+	socket.on('operator:register', () => {
+		operatorSockets.set(socket.id, socket);
+		socket.role = 'operator';
+		console.log(`Operator registered: ${socket.id}`);
+		socket.emit('seat:list', { seats: getSeatList() });
+	});
+
+	// *****************************************
+	// CALL ROUTING
+	// *****************************************
+
+	socket.on('call:initiate', ({ target }) => {
+		const targetSocket = resolveTarget(target);
+
+		if (!targetSocket) {
+			socket.emit('call:error', { message: 'Target offline' });
+			return;
+		}
+
+		if (isInCall(targetSocket)) {
+			socket.emit('call:busy', {});
+			return;
+		}
+
+		const callId = `call-${Date.now()}`;
+		activeCalls.set(callId, {
+			callId,
+			callerSocket: socket,
+			calleeSocket: targetSocket,
+			startTime: null,
+		});
+
+		socket.currentCallId = callId;
+		targetSocket.currentCallId = callId;
+
+		const fromLabel = socket.role === 'operator'
+			? 'Operatör'
+			: `Koltuk ${socket.seatNumber}`;
+
+		targetSocket.emit('call:incoming', {
+			from: socket.role === 'operator' ? 'operator' : `seat-${socket.seatNumber}`,
+			fromLabel,
+			callId,
+		});
+
+		console.log(`Call ${callId}: ${socket.id} → ${targetSocket.id} (target: ${target})`);
+	});
+
+	socket.on('call:accept', ({ callId }) => {
+		const call = activeCalls.get(callId || socket.currentCallId);
+		if (!call) return;
+
+		call.startTime = Date.now();
+		call.callerSocket.emit('call:accepted', { callId: call.callId });
+		console.log(`Call ${call.callId} accepted`);
+		broadcastSeatList();
+	});
+
+	socket.on('call:reject', ({ callId, reason }) => {
+		const call = activeCalls.get(callId || socket.currentCallId);
+		if (!call) return;
+
+		call.callerSocket.emit('call:rejected', { reason });
+		console.log(`Call ${call.callId} rejected: ${reason || 'no reason'}`);
+		cleanupCall(call.callId);
+	});
+
+	socket.on('call:end', () => {
+		console.log(`Call end requested by ${socket.id}`);
+		endCallForSocket(socket);
+	});
+
+	// *****************************************
+	// WEBRTC SIGNALING RELAY
+	// *****************************************
+
+	socket.on('call:offer', ({ sdp }) => {
+		const call = activeCalls.get(socket.currentCallId);
+		if (!call) return;
+		const other = call.callerSocket === socket ? call.calleeSocket : call.callerSocket;
+		other.emit('call:offer', { sdp });
+	});
+
+	socket.on('call:answer', ({ sdp }) => {
+		const call = activeCalls.get(socket.currentCallId);
+		if (!call) return;
+		const other = call.callerSocket === socket ? call.calleeSocket : call.callerSocket;
+		other.emit('call:answer', { sdp });
+	});
+
+	socket.on('call:ice', ({ candidate }) => {
+		const call = activeCalls.get(socket.currentCallId);
+		if (!call) return;
+		const other = call.callerSocket === socket ? call.calleeSocket : call.callerSocket;
+		other.emit('call:ice', { candidate });
 	});
 
 	socket.on('writeRegister', async function (data) {
