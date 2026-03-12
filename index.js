@@ -93,7 +93,7 @@ function calculateLRC(buf) {
 	for (let i = 0; i < buf.length; i++) {
 		lrc += buf[i];
 	}
-	return (lrc & 0xff).toString(16);
+	return (lrc & 0xff).toString(16).padStart(2, '0');
 }
 
 async function openClientConnection() {
