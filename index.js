@@ -541,6 +541,11 @@ io.sockets.on('connection', (socket) => {
 		io.emit('chamberControl', msg);
 	});
 
+	socket.on('patientData', (msg) => {
+		console.log(msg);
+		io.emit('patientData', msg);
+	});
+
 	socket.on('disconnect', (reason) => {
 		connections.splice(connections.indexOf(socket), 1);
 		console.log(
