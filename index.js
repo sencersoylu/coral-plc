@@ -100,22 +100,29 @@ async function openClientConnection() {
 	return new Promise((resolve, reject) => {
 		try {
 			const client = new net.Socket();
+			let settled = false;
 
 			client.connect(500, '192.168.77.3');
 
 			client.setTimeout(250, () => {
+				if (settled) return;
+				settled = true;
 				isConnectedPLC = 2;
-				client.end();
+				client.destroy();
 				sendMessage();
 				reject('Connection Problem!');
 			});
 
 			client.on('ready', () => {
+				if (settled) return;
+				settled = true;
 				isConnectedPLC = 1;
 				resolve(client);
 			});
 
 			client.on('error', (err) => {
+				if (settled) return;
+				settled = true;
 				isConnectedPLC = 2;
 				sendMessage();
 				reject('Connection Problem!');
@@ -544,6 +551,14 @@ io.sockets.on('connection', (socket) => {
 	socket.on('patientData', (msg) => {
 		console.log(msg);
 		io.emit('patientData', msg);
+	});
+
+	socket.on('sessionProfile', (msg) => {
+		io.emit('sessionProfile', msg);
+	});
+
+	socket.on('requestSessionProfile', (msg) => {
+		io.emit('requestSessionProfile', msg);
 	});
 
 	socket.on('disconnect', (reason) => {
