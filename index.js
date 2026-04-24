@@ -34,6 +34,10 @@ function logError(context, err, extra) {
 function logInfo(context, msg) {
 	console.log(`[${ts()}] ${context}: ${msg}`);
 }
+const DEBUG_PLC = process.env.DEBUG_PLC === '1';
+function logDebug(context, msg) {
+	if (DEBUG_PLC) console.log(`[${ts()}] ${context}: ${msg}`);
+}
 
 // Persistent PLC connection state
 let plcClient = null;
@@ -165,8 +169,8 @@ function connectPLC() {
 	if (plcClient || plcConnecting) return;
 	plcConnecting = true;
 
-	const host = PLC_IP || '192.168.77.3';
-	const port = parseInt(PLC_PORT, 10) || 500;
+	const host = '192.168.77.3';
+	const port = 500;
 
 	const client = new net.Socket();
 	client.setKeepAlive(true, 10000);
@@ -193,41 +197,63 @@ function connectPLC() {
 	});
 
 	client.on('data', (chunk) => {
+		logDebug('PLC rx', `chunk len=${chunk.length} hex=${chunk.toString('hex')}`);
 		rxBuffer = Buffer.concat([rxBuffer, chunk]);
+
+		// Single-byte protocol replies (ACK 0x06 / NAK 0x15) — clear in-flight, no framing
+		while (rxBuffer.length > 0 && (rxBuffer[0] === 0x06 || rxBuffer[0] === 0x15)) {
+			logDebug('PLC rx', rxBuffer[0] === 0x06 ? 'ACK' : 'NAK');
+			rxBuffer = rxBuffer.slice(1);
+			onResponseReceived();
+		}
+
 		// Frame by STX(0x02) ... ETX(0x03)
 		while (true) {
 			const stx = rxBuffer.indexOf(0x02);
 			if (stx === -1) {
+				if (rxBuffer.length > 0) {
+					logInfo('PLC rx', `discarding ${rxBuffer.length} bytes (no STX): ${rxBuffer.toString('hex')}`);
+				}
 				rxBuffer = Buffer.alloc(0);
 				break;
 			}
-			if (stx > 0) rxBuffer = rxBuffer.slice(stx);
+			if (stx > 0) {
+				logDebug('PLC rx', `stripped ${stx} pre-STX bytes`);
+				rxBuffer = rxBuffer.slice(stx);
+			}
 			const etx = rxBuffer.indexOf(0x03);
 			if (etx === -1) break; // wait for more bytes
 			const frame = rxBuffer.slice(0, etx + 1);
 			rxBuffer = rxBuffer.slice(etx + 1);
+			logDebug('PLC frame', `len=${frame.length} hex=${frame.toString('hex')}`);
 			handleFrame(frame);
 			onResponseReceived();
 		}
 	});
 
+	logInfo('PLC', `connecting to ${host}:${port}...`);
 	client.connect(port, host);
 }
 
 function handleFrame(data) {
 	try {
 		const head = data.slice(0, 4);
-		if (Buffer.compare(head, Buffer.from([0x02, 0x30, 0x31, 0x34])) !== 0) {
-			return; // not a register-read response we care about
+		const expected = Buffer.from([0x02, 0x30, 0x31, 0x34]);
+		if (Buffer.compare(head, expected) !== 0) {
+			logDebug('PLC frame', `head mismatch — got=${head.toString('hex')} fullAscii=${data.toString('ascii').replace(/[\x00-\x1f]/g, '.')}`);
+			return;
 		}
 		const buff = data.slice(6, data.length - 3);
+		logDebug('PLC frame', `payload ascii=${buff.toString('ascii')}`);
 		const size = Math.floor(buff.length / 4);
+		const parsed = [];
 		for (let index = 0; index < size; index++) {
-			sensorData[index] = parseInt(
-				buff.slice(index * 4, index * 4 + 4).toString('ascii'),
-				16
-			);
+			const word = buff.slice(index * 4, index * 4 + 4).toString('ascii');
+			const v = parseInt(word, 16);
+			sensorData[index] = v;
+			parsed.push(v);
 		}
+		logDebug('PLC frame', `parsed ${size} regs: ${JSON.stringify(parsed)}`);
 		sendMessage();
 	} catch (error) {
 		logError('PLC frame parse', error, { len: data && data.length, hex: data && data.toString('hex') });
