@@ -17,6 +17,24 @@ let isConnectedPLC = 0;
 
 const sensorData = [];
 
+// Logging helpers
+function ts() {
+	return new Date().toISOString();
+}
+function logError(context, err, extra) {
+	const msg = err && err.message ? err.message : String(err);
+	const code = err && err.code ? ` code=${err.code}` : '';
+	const errno = err && err.errno != null ? ` errno=${err.errno}` : '';
+	const syscall = err && err.syscall ? ` syscall=${err.syscall}` : '';
+	const addr = err && err.address ? ` addr=${err.address}:${err.port || ''}` : '';
+	const ex = extra ? ` ${JSON.stringify(extra)}` : '';
+	console.error(`[${ts()}] ERROR ${context}: ${msg}${code}${errno}${syscall}${addr}${ex}`);
+	if (err && err.stack) console.error(err.stack);
+}
+function logInfo(context, msg) {
+	console.log(`[${ts()}] ${context}: ${msg}`);
+}
+
 // Persistent PLC connection state
 let plcClient = null;
 let plcConnecting = false;
@@ -62,6 +80,13 @@ const { PLC_PORT } = process.env;
 // *****************************************
 // *****************************************
 // *****************************************
+process.on('uncaughtException', (err) => {
+	logError('uncaughtException', err);
+});
+process.on('unhandledRejection', (reason) => {
+	logError('unhandledRejection', reason instanceof Error ? reason : new Error(String(reason)));
+});
+
 init();
 const allRoutes = require('./src/routes');
 
@@ -97,7 +122,7 @@ async function init() {
 	try {
 		// Removed commented service code
 	} catch (err) {
-		console.log(err);
+		logError('init', err);
 	}
 }
 
@@ -132,7 +157,7 @@ function teardownPLC(reason) {
 		isConnectedPLC = 2;
 		sendMessage();
 	}
-	console.log(`PLC connection down: ${reason}`);
+	logInfo('PLC', `connection down: ${reason} — reconnect in ${PLC_RECONNECT_DELAY_MS}ms`);
 	scheduleReconnect();
 }
 
@@ -153,13 +178,13 @@ function connectPLC() {
 		rxBuffer = Buffer.alloc(0);
 		isConnectedPLC = 1;
 		sendMessage();
-		console.log(`PLC connected ${host}:${port}`);
+		logInfo('PLC', `connected ${host}:${port}`);
 		// Drain anything queued during downtime
 		processQueue();
 	});
 
 	client.on('error', (err) => {
-		console.log('PLC socket error:', err.message);
+		logError('PLC socket', err, { host, port });
 		// 'close' will follow; teardown there
 	});
 
@@ -205,7 +230,7 @@ function handleFrame(data) {
 		}
 		sendMessage();
 	} catch (error) {
-		console.log('Frame parse error:', error);
+		logError('PLC frame parse', error, { len: data && data.length, hex: data && data.toString('hex') });
 	}
 }
 
@@ -223,14 +248,18 @@ function processQueue() {
 	try {
 		plcClient.write(buf);
 	} catch (e) {
-		console.log(`PLC write error (${label}):`, e.message);
+		logError('PLC write', e, { label, queued: requestQueue.length });
 		teardownPLC('write failed');
 		return;
 	}
 
 	inFlightTimer = setTimeout(() => {
 		inFlightTimer = null;
-		console.log(`PLC response timeout (${label})`);
+		logError('PLC response timeout', new Error('no reply within window'), {
+			label,
+			timeoutMs: PLC_RESPONSE_TIMEOUT_MS,
+			queued: requestQueue.length,
+		});
 		teardownPLC('response timeout');
 	}, PLC_RESPONSE_TIMEOUT_MS);
 }
@@ -576,7 +605,7 @@ io.engine.on('headers', (headers, req) => {
 });
 
 io.on('connect_error', (err) => {
-	console.log('Socket.IO connect_error:', err);
+	logError('Socket.IO connect_error', err);
 });
 
 io.sockets.on('connection', (socket) => {
@@ -636,11 +665,11 @@ io.sockets.on('connection', (socket) => {
 	});
 
 	socket.on('error', (error) => {
-		console.log(`Socket error for ${socket.id}:`, error);
+		logError('socket.error', error, { socketId: socket.id });
 	});
 
 	socket.on('connect_error', (error) => {
-		console.log(`Socket connect_error for ${socket.id}:`, error);
+		logError('socket.connect_error', error, { socketId: socket.id });
 	});
 
 	// *****************************************
@@ -759,7 +788,7 @@ io.sockets.on('connection', (socket) => {
 			const bufData = await writeData(test.register, test.value);
 			enqueuePLC(bufData, `writeRegister ${test.register}`);
 		} catch (err) {
-			console.log('writeRegister error:', err);
+			logError('writeRegister', err, { socketId: socket.id, raw: data });
 		}
 	});
 
@@ -769,7 +798,7 @@ io.sockets.on('connection', (socket) => {
 			const bufData = await writeBit(data.register, data.value);
 			enqueuePLC(bufData, `writeBit ${data.register}`);
 		} catch (err) {
-			console.log('writeBit error:', err);
+			logError('writeBit', err, { socketId: socket.id, raw: data });
 		}
 	});
 
@@ -780,7 +809,7 @@ io.sockets.on('connection', (socket) => {
 			const bufData = await writeMultipleData(test.address, test.values);
 			enqueuePLC(bufData, `writeMultiple ${test.address}`);
 		} catch (err) {
-			console.log('writeMultipleRegisters error:', err);
+			logError('writeMultipleRegisters', err, { socketId: socket.id, raw: data });
 		}
 	});
 });
