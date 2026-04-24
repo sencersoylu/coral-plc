@@ -249,6 +249,13 @@ function handleFrame(data) {
 			return;
 		}
 
+		// Byte 4 is CMD second char: '6'=read(46), '7'=write(47), '5'=bit-write(45)
+		// Only read responses carry sensor payload; ignore write/bit acks.
+		if (data[4] !== 0x36) {
+			logDebug('PLC frame', `non-read ack cmd=${String.fromCharCode(data[4])} hex=${data.toString('hex')}`);
+			return;
+		}
+
 		// Stuck-data watchdog: identical full frame N times in a row → force reconnect
 		const frameHex = data.toString('hex');
 		if (frameHex === lastFrameHex) {
@@ -355,14 +362,11 @@ async function writeBit(registerAdress, value) {
 
 	const LRC = calculateLRC(bufA);
 
-	console.log(LRC);
-
 	const bufB = Buffer.concat([
 		bufA,
 		Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
 	]);
 
-	console.log(bufB);
 	return bufB;
 }
 
@@ -390,14 +394,11 @@ async function writeData(registerAdress, value) {
 
 	const LRC = calculateLRC(bufA);
 
-	console.log(LRC);
-
 	const bufB = Buffer.concat([
 		bufA,
 		Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
 	]);
 
-	console.log(bufB);
 	return bufB;
 }
 
@@ -441,18 +442,11 @@ async function writeMultipleData(startRegisterAddress, values) {
 
 	const LRC = calculateLRC(bufA);
 
-	console.log(`LRC: ${LRC}`);
-	console.log(
-		`Writing ${numValues} values starting at ${startRegisterAddress}:`,
-		values
-	);
-
 	const bufB = Buffer.concat([
 		bufA,
 		Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
 	]);
 
-	console.log('Complete buffer:', bufB);
 	return bufB;
 }
 
@@ -488,8 +482,10 @@ function buildReadRequest() {
 
 setInterval(async () => {
 	if (demo == 0) {
-		// Drop poll if already busy / queue building up — keeps us in sync with PLC cadence
-		if (inFlightTimer || requestQueue.length > 0) return;
+		// Always queue the poll, but don't pile up multiple polls behind heavy
+		// write traffic — one outstanding poll at a time is enough.
+		const pollPending = requestQueue.some((r) => r.label === 'poll');
+		if (pollPending) return;
 		enqueuePLC(buildReadRequest(), 'poll');
 	} else {
 		console.log('demo mode');
