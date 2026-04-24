@@ -10,13 +10,22 @@ const cors = require('cors');
 const { Chance } = require('chance');
 const chance = new Chance();
 
-const demo = 1;
+const demo = 0;
 
 const connections = []; // view soket bağlantılarının tutulduğu array
-let isWorking = 0;
 let isConnectedPLC = 0;
 
 const sensorData = [];
+
+// Persistent PLC connection state
+let plcClient = null;
+let plcConnecting = false;
+let plcReconnectTimer = null;
+let rxBuffer = Buffer.alloc(0);
+const requestQueue = [];
+let inFlightTimer = null;
+const PLC_RESPONSE_TIMEOUT_MS = 1000;
+const PLC_RECONNECT_DELAY_MS = 2000;
 
 // Seat & Operator Registry for call system
 const seatSockets = new Map();     // seatNumber → socket
@@ -58,6 +67,10 @@ const allRoutes = require('./src/routes');
 
 app.use(allRoutes);
 
+if (demo == 0) {
+	connectPLC();
+}
+
 // *****************************************
 // *****************************************
 // *****************************************
@@ -96,78 +109,138 @@ function calculateLRC(buf) {
 	return (lrc & 0xff).toString(16).padStart(2, '0');
 }
 
-async function openClientConnection() {
-	return new Promise((resolve, reject) => {
-		try {
-			const client = new net.Socket();
-			let settled = false;
+function scheduleReconnect() {
+	if (plcReconnectTimer) return;
+	plcReconnectTimer = setTimeout(() => {
+		plcReconnectTimer = null;
+		connectPLC();
+	}, PLC_RECONNECT_DELAY_MS);
+}
 
-			client.connect(500, '192.168.77.3');
+function teardownPLC(reason) {
+	if (plcClient) {
+		try { plcClient.destroy(); } catch (e) {}
+		plcClient = null;
+	}
+	plcConnecting = false;
+	rxBuffer = Buffer.alloc(0);
+	if (inFlightTimer) {
+		clearTimeout(inFlightTimer);
+		inFlightTimer = null;
+	}
+	if (isConnectedPLC !== 2) {
+		isConnectedPLC = 2;
+		sendMessage();
+	}
+	console.log(`PLC connection down: ${reason}`);
+	scheduleReconnect();
+}
 
-			client.setTimeout(250, () => {
-				if (settled) return;
-				settled = true;
-				isConnectedPLC = 2;
-				client.destroy();
-				sendMessage();
-				reject('Connection Problem!');
-			});
+function connectPLC() {
+	if (plcClient || plcConnecting) return;
+	plcConnecting = true;
 
-			client.on('ready', () => {
-				if (settled) return;
-				settled = true;
-				isConnectedPLC = 1;
-				resolve(client);
-			});
+	const host = PLC_IP || '192.168.77.3';
+	const port = parseInt(PLC_PORT, 10) || 500;
 
-			client.on('error', (err) => {
-				if (settled) return;
-				settled = true;
-				isConnectedPLC = 2;
-				sendMessage();
-				reject('Connection Problem!');
-			});
+	const client = new net.Socket();
+	client.setKeepAlive(true, 10000);
+	client.setNoDelay(true);
 
-			client.on('data', (data) => {
-				let test, buff;
-				try {
-					client.destroy();
+	client.once('ready', () => {
+		plcConnecting = false;
+		plcClient = client;
+		rxBuffer = Buffer.alloc(0);
+		isConnectedPLC = 1;
+		sendMessage();
+		console.log(`PLC connected ${host}:${port}`);
+		// Drain anything queued during downtime
+		processQueue();
+	});
 
-					console.log(
-						`Receive client send data : ${data}, data size : ${client.bytesRead}`
-					);
+	client.on('error', (err) => {
+		console.log('PLC socket error:', err.message);
+		// 'close' will follow; teardown there
+	});
 
-					test = Buffer.from(data.slice(0, 4), 'hex');
-					if (
-						Buffer.compare(test, Buffer.from([0x02, 0x30, 0x31, 0x34])) == 0
-					) {
-						buff = Buffer.from(data.slice(6, data.length - 3), 'hex');
+	client.on('close', () => {
+		teardownPLC('socket closed');
+	});
 
-						const size = buff.length / 4;
-
-						for (let index = 0; index < size; index++) {
-							sensorData[index] = parseInt(
-								buff.slice(index * 4, index * 4 + 4).toString(),
-								16
-							);
-						}
-					}
-				} catch (error) {
-					console.log(error);
-				} finally {
-					console.log('data recived');
-					if (
-						Buffer.compare(test, Buffer.from([0x02, 0x30, 0x31, 0x34])) == 0
-					) {
-						console.log(sensorData);
-						sendMessage();
-					}
-				}
-			});
-		} catch (err) {
-			console.log(err);
+	client.on('data', (chunk) => {
+		rxBuffer = Buffer.concat([rxBuffer, chunk]);
+		// Frame by STX(0x02) ... ETX(0x03)
+		while (true) {
+			const stx = rxBuffer.indexOf(0x02);
+			if (stx === -1) {
+				rxBuffer = Buffer.alloc(0);
+				break;
+			}
+			if (stx > 0) rxBuffer = rxBuffer.slice(stx);
+			const etx = rxBuffer.indexOf(0x03);
+			if (etx === -1) break; // wait for more bytes
+			const frame = rxBuffer.slice(0, etx + 1);
+			rxBuffer = rxBuffer.slice(etx + 1);
+			handleFrame(frame);
+			onResponseReceived();
 		}
 	});
+
+	client.connect(port, host);
+}
+
+function handleFrame(data) {
+	try {
+		const head = data.slice(0, 4);
+		if (Buffer.compare(head, Buffer.from([0x02, 0x30, 0x31, 0x34])) !== 0) {
+			return; // not a register-read response we care about
+		}
+		const buff = data.slice(6, data.length - 3);
+		const size = Math.floor(buff.length / 4);
+		for (let index = 0; index < size; index++) {
+			sensorData[index] = parseInt(
+				buff.slice(index * 4, index * 4 + 4).toString('ascii'),
+				16
+			);
+		}
+		sendMessage();
+	} catch (error) {
+		console.log('Frame parse error:', error);
+	}
+}
+
+function enqueuePLC(buf, label) {
+	requestQueue.push({ buf, label: label || 'req' });
+	processQueue();
+}
+
+function processQueue() {
+	if (inFlightTimer) return; // waiting for a response
+	if (!plcClient || isConnectedPLC !== 1) return;
+	if (requestQueue.length === 0) return;
+
+	const { buf, label } = requestQueue.shift();
+	try {
+		plcClient.write(buf);
+	} catch (e) {
+		console.log(`PLC write error (${label}):`, e.message);
+		teardownPLC('write failed');
+		return;
+	}
+
+	inFlightTimer = setTimeout(() => {
+		inFlightTimer = null;
+		console.log(`PLC response timeout (${label})`);
+		teardownPLC('response timeout');
+	}, PLC_RESPONSE_TIMEOUT_MS);
+}
+
+function onResponseReceived() {
+	if (inFlightTimer) {
+		clearTimeout(inFlightTimer);
+		inFlightTimer = null;
+	}
+	processQueue();
 }
 
 function d2h(d) {
@@ -309,52 +382,33 @@ async function writeMultipleData(startRegisterAddress, values) {
 // *****************************************
 // *****************************************
 
+function buildReadRequest() {
+	const buf1 = Buffer.from(
+		[
+			0x02,
+			'0'.charCodeAt(),
+			'1'.charCodeAt(),
+			'4'.charCodeAt(),
+			'6'.charCodeAt(),
+			'1'.charCodeAt(),
+			'3'.charCodeAt(),
+		],
+		'ascii'
+	);
+	const buf2 = Buffer.from('R02000');
+	const bufA = Buffer.concat([buf1, buf2], buf1.length + buf2.length);
+	const LRC = calculateLRC(bufA);
+	return Buffer.concat([
+		bufA,
+		Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
+	]);
+}
+
 setInterval(async () => {
 	if (demo == 0) {
-		try {
-			if (isWorking) {
-				return;
-			}
-			//console.log('**************** START ****************');
-
-			isWorking = 1;
-			const client = await openClientConnection();
-			//console.log(writeData())
-			//let data = await writeData('R0020',87);
-			//await client.write(data);
-
-			const buf1 = Buffer.from(
-				[
-					0x02,
-					'0'.charCodeAt(),
-					'1'.charCodeAt(),
-					'4'.charCodeAt(),
-					'6'.charCodeAt(),
-					'1'.charCodeAt(),
-					'3'.charCodeAt(),
-				],
-				'ascii'
-			);
-
-			const buf2 = Buffer.from('R02000');
-			const bufA = Buffer.concat([buf1, buf2], buf1.length + buf2.length);
-
-			const LRC = calculateLRC(bufA);
-
-			const bufB = Buffer.concat([
-				bufA,
-				Buffer.from([LRC[0].charCodeAt(), LRC[1].charCodeAt(), 0x03]),
-			]);
-
-			await client.write(bufB);
-		} catch (err) {
-			console.log(err);
-			isConnectedPLC = 0;
-		} finally {
-			isWorking = 0;
-			// client.destroy();
-			//console.log('**************** END ****************');
-		}
+		// Drop poll if already busy / queue building up — keeps us in sync with PLC cadence
+		if (inFlightTimer || requestQueue.length > 0) return;
+		enqueuePLC(buildReadRequest(), 'poll');
 	} else {
 		console.log('demo mode');
 		io.emit(
@@ -549,7 +603,7 @@ io.sockets.on('connection', (socket) => {
 	});
 
 	socket.on('patientData', (msg) => {
-		console.log(msg);
+		//console.log(msg);
 		io.emit('patientData', msg);
 	});
 
@@ -699,78 +753,34 @@ io.sockets.on('connection', (socket) => {
 	});
 
 	socket.on('writeRegister', async function (data) {
-		console.log(data);
-
 		try {
-			console.log('**************** START WRITE REGISTER ****************');
-
-			isWorking = 1;
-			const client = await openClientConnection();
-
-			console.log(data);
-			let test = JSON.parse(data);
-			console.log(test, test.register, test.value);
-
-			let bufData = await writeData(test.register, test.value);
-			await client.write(bufData);
+			const test = typeof data === 'string' ? JSON.parse(data) : data;
+			console.log('writeRegister', test.register, test.value);
+			const bufData = await writeData(test.register, test.value);
+			enqueuePLC(bufData, `writeRegister ${test.register}`);
 		} catch (err) {
-			console.log(err);
-			isConnectedPLC = 0;
-		} finally {
-			isWorking = 0;
-			// client.destroy();
-			console.log('**************** END WRITE REGISTER ****************');
+			console.log('writeRegister error:', err);
 		}
 	});
 
 	socket.on('writeBit', async function (data) {
-		console.log(data);
-
 		try {
-			console.log('**************** START ****************');
-
-			isWorking = 1;
-			const client = await openClientConnection();
-
-			let bufData = await writeBit(data.register, data.value);
-			await client.write(bufData);
+			console.log('writeBit', data);
+			const bufData = await writeBit(data.register, data.value);
+			enqueuePLC(bufData, `writeBit ${data.register}`);
 		} catch (err) {
-			console.log(err);
-			isConnectedPLC = 0;
-		} finally {
-			isWorking = 0;
-			// client.destroy();
-			console.log('**************** END ****************');
+			console.log('writeBit error:', err);
 		}
 	});
 
 	socket.on('writeMultipleRegisters', async function (data) {
-		console.log('Writing multiple registers:', data);
-
 		try {
-			console.log('**************** START MULTIPLE WRITE ****************');
-
-			isWorking = 1;
-			const client = await openClientConnection();
-
-			// Handle both string and object data
-			let test;
-			if (typeof data === 'string') {
-				test = JSON.parse(data);
-			} else {
-				test = data;
-			}
-			console.log(test);
-
-			let bufData = await writeMultipleData(test.address, test.values);
-			await client.write(bufData);
+			const test = typeof data === 'string' ? JSON.parse(data) : data;
+			console.log('writeMultipleRegisters', test);
+			const bufData = await writeMultipleData(test.address, test.values);
+			enqueuePLC(bufData, `writeMultiple ${test.address}`);
 		} catch (err) {
-			console.log(err);
-			isConnectedPLC = 0;
-		} finally {
-			isWorking = 0;
-			// client.destroy();
-			console.log('**************** END MULTIPLE WRITE ****************');
+			console.log('writeMultipleRegisters error:', err);
 		}
 	});
 });
