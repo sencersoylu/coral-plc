@@ -254,6 +254,7 @@ function handleFrame(data) {
 			parsed.push(v);
 		}
 		logDebug('PLC frame', `parsed ${size} regs: ${JSON.stringify(parsed)}`);
+		logInfo('sensorData', JSON.stringify(parsed));
 		sendMessage();
 	} catch (error) {
 		logError('PLC frame parse', error, { len: data && data.length, hex: data && data.toString('hex') });
