@@ -48,6 +48,9 @@ const requestQueue = [];
 let inFlightTimer = null;
 const PLC_RESPONSE_TIMEOUT_MS = 1000;
 const PLC_RECONNECT_DELAY_MS = 2000;
+const PLC_STUCK_THRESHOLD = 5;
+let lastFrameHex = null;
+let unchangedFrameCount = 0;
 
 // Seat & Operator Registry for call system
 const seatSockets = new Map();     // seatNumber → socket
@@ -153,6 +156,8 @@ function teardownPLC(reason) {
 	}
 	plcConnecting = false;
 	rxBuffer = Buffer.alloc(0);
+	lastFrameHex = null;
+	unchangedFrameCount = 0;
 	if (inFlightTimer) {
 		clearTimeout(inFlightTimer);
 		inFlightTimer = null;
@@ -243,6 +248,27 @@ function handleFrame(data) {
 			logDebug('PLC frame', `head mismatch — got=${head.toString('hex')} fullAscii=${data.toString('ascii').replace(/[\x00-\x1f]/g, '.')}`);
 			return;
 		}
+
+		// Stuck-data watchdog: identical full frame N times in a row → force reconnect
+		const frameHex = data.toString('hex');
+		if (frameHex === lastFrameHex) {
+			unchangedFrameCount++;
+			if (unchangedFrameCount >= PLC_STUCK_THRESHOLD) {
+				logError(
+					'PLC stuck',
+					new Error(`${unchangedFrameCount} identical frames — forcing reconnect`),
+					{ threshold: PLC_STUCK_THRESHOLD, frameHex }
+				);
+				lastFrameHex = null;
+				unchangedFrameCount = 0;
+				teardownPLC('stuck data');
+				return;
+			}
+		} else {
+			unchangedFrameCount = 0;
+			lastFrameHex = frameHex;
+		}
+
 		const buff = data.slice(6, data.length - 3);
 		logDebug('PLC frame', `payload ascii=${buff.toString('ascii')}`);
 		const size = Math.floor(buff.length / 4);
