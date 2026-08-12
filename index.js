@@ -171,6 +171,16 @@ function teardownPLC(reason) {
 }
 
 function connectPLC() {
+	// DEMO RIG (yerel test duzenegi) — gercek FATEK PLC yokken /health'in
+	// isConnectedPLC:1 dondurmesi icin. Uygulamanin splash gate'i PLC baglantisi
+	// sart kosuyor (SplashReadinessRepository.checkBackendOnce).
+	if (process.env.FAKE_PLC === '1') {
+		if (isConnectedPLC !== 1) {
+			isConnectedPLC = 1;
+			console.log('[DEMO RIG] FAKE_PLC=1 — PLC baglantisi taklit ediliyor');
+		}
+		return;
+	}
 	if (plcClient || plcConnecting) return;
 	plcConnecting = true;
 
@@ -615,12 +625,15 @@ function cleanupCall(callId) {
 // ***********************************************************
 // ***********************************************************
 const server = http.Server(app);
-server.listen(4000, '0.0.0.0', () => {
-	console.log('Listening on port 4000');
+// Dinleme portu. Varsayilan 4000 degismedi; WS_PORT yalnizca yerel test duzeneginde
+// (baska bir sey 4000'i tutuyorken) baska bir porta almak icin.
+const WS_PORT = Number(process.env.WS_PORT) || 4000;
+server.listen(WS_PORT, '0.0.0.0', () => {
+	console.log(`Listening on port ${WS_PORT}`);
 	console.log('Server available at:');
-	console.log('- Local: http://localhost:4000');
-	console.log('- Network: http://0.0.0.0:4000');
-	console.log('- Health check: http://localhost:4000/health');
+	console.log(`- Local: http://localhost:${WS_PORT}`);
+	console.log(`- Network: http://0.0.0.0:${WS_PORT}`);
+	console.log(`- Health check: http://localhost:${WS_PORT}/health`);
 });
 
 // ***********************************************************
